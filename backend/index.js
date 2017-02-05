@@ -7,7 +7,6 @@ var pgp = require('pg-promise')({
 var join = bluebird.join
 
 require('dotenv').load()
-
 var db = pgp({
   user: process.env.JOBBATICAL_USER,
   password: process.env.JOBBATICAL_PW,
@@ -33,11 +32,16 @@ app.get('/users', function(req, res){
         if (!user) {
           return res.json({}) // TODO: Replace with error message
         }
-        Object.assign(payload, user)
+        Object.assign(payload, {
+          'id': user.id,
+          'name': user.name,
+          'createdAt': user.created_at
+        })
         return user
 
     }).then(function(user){
 
+      // Cannot get the company info directly; need to get IDs from teams table first
       return t.result('SELECT company_id, contact_user FROM teams WHERE user_id = $1 LIMIT 5', user.id)
         .then(function(companyInfoByUser){
 
@@ -47,12 +51,20 @@ app.get('/users', function(req, res){
           return t.any('SELECT * FROM companies WHERE id = ANY($1::int[])', [companyIds]) // TODO: Limit to 5
             .then(function(companies){
 
-              for (company in companies) {
+              // Is the user a contact for each company they are associated with?
+              for (company in companies){
                 var thisCompany = companies[company]
                 var miscInfo = companyInfoByUser.rows.find(function(o){
                   return o.company_id === thisCompany.id
                 })
                 Object.assign(thisCompany, miscInfo)
+
+                thisCompany.createdAt = thisCompany.created_at  // minor editing
+                thisCompany.isContact = thisCompany.contact_user
+                delete(thisCompany.created_at)
+                delete(thisCompany.contact_user)
+                delete(thisCompany.company_id)
+
                 payload.companies.push(thisCompany)
               }
               return user
@@ -64,27 +76,49 @@ app.get('/users', function(req, res){
       return t.any("SELECT * from listings WHERE created_by = $1 LIMIT 5", user.id) // TODO: sort?
         .then(function(listings){
 
-          Object.assign(payload.createdListings, listings) // TODO: Adjust output here — it's not exactly identical
+          for (listing in listings){
+            var thisListing = listings[listing]
+            payload.createdListings.push({
+              'id': payload.id,
+              'createdAt': thisListing.created_at,
+              'name': thisListing.name,
+              'description': thisListing.description
+            })
+
+          }
 
           var listingIds = listings.map(function(x){
             return x.id
           })
-          return t.any('SELECT * FROM applications WHERE id = ANY($1::int[])', [listingIds]) // TODO: Limit to 5
-            .then(function(applications){
 
-              for (application in applications) {
-                var thisApplication = applications[application]
-                var whichListing = listings.find(function(x){
-                  return x.id === thisApplication.listing_id
-                })
-                thisApplication.listing = whichListing
+      return user
+
+    }).then(function(user){
+
+      return t.any('SELECT * FROM applications WHERE user_id = $1', user.id) // TODO: Limit to 5
+        .then(function(applications){
+
+          for (application in applications){
+            var thisApplication = applications[application]
+            return t.any('SELECT * FROM listings WHERE id = $1', thisApplication.listing_id)
+              .then(function(listing){
+
+                thisApplication.listing = listing[0]
+                thisApplication.coverLetter = thisApplication.cover_letter // minor editing
+                delete(thisApplication.listing.created_by)
+                delete(thisApplication.listing.created_at)
+                delete(thisApplication.listing_id)
+                delete(thisApplication.user_id)
+                delete(thisApplication.cover_letter)
+
                 payload.applications.push(thisApplication)
-              }
+              })
+          }
 
-            return user
-            })
-
+        return user
         })
+
+      })
 
     }).then(function(user){
       res.json(payload)
