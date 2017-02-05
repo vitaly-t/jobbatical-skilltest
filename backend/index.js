@@ -19,7 +19,7 @@ var db = pgp({
 })
 
 app.get('/users', function(req, res) {
-  var id = parseInt(req.query.id)
+  var id = parseInt(req.query.id) || 1
   var payload = {
     companies: [],
     createdListings: [],
@@ -42,34 +42,23 @@ app.get('/users', function(req, res) {
 
     }).then(function(user) {
 
-      // Cannot get the company info directly; need to get IDs from teams table first
-      return t.result('SELECT company_id, contact_user FROM teams WHERE user_id = $1 LIMIT 5', user.id)
-        .then(function(companyInfoByUser) {
+      return t.result('SELECT DISTINCT t.company_id, t.contact_user, c.* \
+                       FROM teams AS t INNER JOIN companies AS c \
+                       ON c.id = t.company_id \
+                       WHERE t.user_id = $1 LIMIT 5', user.id)
 
-          var companyIds = companyInfoByUser.rows.map(function(x) {
-            return x.company_id
+        .then(function(companies){
+          companies.rows.map(function(x){
+
+            x.createdAt = x.created_at  // minor editing
+            x.isContact = x.contact_user
+            delete(x.created_at)
+            delete(x.contact_user)
+            delete(x.company_id)
+
+            payload.companies.push(x)
           })
-          return t.any('SELECT * FROM companies WHERE id = ANY($1::int[])', [companyIds]) // TODO: Limit to 5
-            .then(function(companies) {
-
-              // Is the user a contact for each company they are associated with?
-              for (company in companies) {
-                var thisCompany = companies[company]
-                var miscInfo = companyInfoByUser.rows.find(function(o) {
-                  return o.company_id === thisCompany.id
-                })
-                Object.assign(thisCompany, miscInfo)
-
-                thisCompany.createdAt = thisCompany.created_at  // minor editing
-                thisCompany.isContact = thisCompany.contact_user
-                delete(thisCompany.created_at)
-                delete(thisCompany.contact_user)
-                delete(thisCompany.company_id)
-
-                payload.companies.push(thisCompany)
-              }
-              return user
-            })
+          return user
         })
 
     }).then(function(user) {
@@ -77,6 +66,7 @@ app.get('/users', function(req, res) {
       return t.any("SELECT * from listings WHERE created_by = $1 LIMIT 5", user.id) // TODO: sort?
         .then(function(listings) {
 
+          // TODO: Replace with forEach
           for (listing in listings) {
             var thisListing = listings[listing]
             payload.createdListings.push({
@@ -87,36 +77,28 @@ app.get('/users', function(req, res) {
             })
 
           }
-
-          var listingIds = listings.map(function(x) {
-            return x.id
-          })
-
-      return user
+          return user
 
     }).then(function(user) {
 
-      return t.any('SELECT * FROM applications WHERE user_id = $1', user.id) // TODO: Limit to 5
+      return t.result('SELECT DISTINCT a.id as app_id, a.created_at, a.cover_letter, l.id as listing_id, l.name, l.description \
+                       FROM applications AS a INNER JOIN listings AS l \
+                       ON listing_id = a.listing_id \
+                       WHERE a.user_id = $1 LIMIT 5', user.id)
         .then(function(applications) {
-
-          for (application in applications) {
-            var thisApplication = applications[application]
-            return t.any('SELECT * FROM listings WHERE id = $1', thisApplication.listing_id)
-              .then(function(listing) {
-
-                thisApplication.listing = listing[0]
-                thisApplication.coverLetter = thisApplication.cover_letter // minor editing
-                delete(thisApplication.listing.created_by)
-                delete(thisApplication.listing.created_at)
-                delete(thisApplication.listing_id)
-                delete(thisApplication.user_id)
-                delete(thisApplication.cover_letter)
-
-                payload.applications.push(thisApplication)
-              })
-          }
-
-        return user
+          applications.rows.map(function(x){
+            payload.applications.push({
+              'id': x.app_id,
+              'createdAt': x.created_at,
+              'coverLetter': x.cover_letter,
+              'listing': {
+                'id': x.listing_id,
+                'name': x.name,
+                'description:': x.description
+              }
+            })
+          })
+          return user
         })
 
       })
