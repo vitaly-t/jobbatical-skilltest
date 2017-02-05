@@ -50,38 +50,38 @@ app.get('/users', function(req, res) {
         .then(function(companies){
           companies.rows.map(function(x){
 
-            x.createdAt = x.created_at  // minor editing
-            x.isContact = x.contact_user
-            delete(x.created_at)
-            delete(x.contact_user)
-            delete(x.company_id)
+            payload.companies.push({
+              'id': x.id,
+              'name': x.name,
+              'createdAt': x.created_at,
+              'isContact': x.contact_user
+            })
 
-            payload.companies.push(x)
           })
           return user
         })
 
     }).then(function(user) {
 
-      return t.any("SELECT * from listings WHERE created_by = $1 LIMIT 5", user.id) // TODO: sort?
+      return t.any("SELECT * from listings WHERE created_by = $1 \
+                    ORDER BY created_by DESC LIMIT 5", user.id)
         .then(function(listings) {
 
-          // TODO: Replace with forEach
-          for (listing in listings) {
-            var thisListing = listings[listing]
+          listings.forEach(function(listing){
             payload.createdListings.push({
-              'id': payload.id,
-              'createdAt': thisListing.created_at,
-              'name': thisListing.name,
-              'description': thisListing.description
+              'id': listing.id,
+              'createdAt': listing.created_at,
+              'name': listing.name,
+              'description': listing.description
             })
+          })
 
-          }
-          return user
+      return user
 
     }).then(function(user) {
 
-      return t.result('SELECT DISTINCT a.id as app_id, a.created_at, a.cover_letter, l.id as listing_id, l.name, l.description \
+      return t.result('SELECT DISTINCT a.id as app_id, a.created_at, a.cover_letter, \
+                                       l.id as listing_id, l.name, l.description \
                        FROM applications AS a INNER JOIN listings AS l \
                        ON listing_id = a.listing_id \
                        WHERE a.user_id = $1 LIMIT 5', user.id)
@@ -148,10 +148,8 @@ app.get('/topActiveUsers', function(req, res) {
               })
 
               // 4. Take newest 3 listings for each user and inject into appropriate user
-              return t.any("SELECT name from listings \
-                            WHERE created_by = $1 \
-                            ORDER BY created_at DESC \
-                            LIMIT 3", user.id)
+              return t.any("SELECT name from listings WHERE created_by = $1 \
+                            ORDER BY created_at DESC LIMIT 3", user.id)
                 .then(function(listings) {
                   var targetUser = payload.find(function(x) {
                     return x.id === user.id
